@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import type { NextPage } from "next";
-import { parseUnits } from "viem";
-import { useAccount } from "wagmi";
+import { formatUnits, parseUnits } from "viem";
 import { Skeleton } from "~~/components/maeve/Skeleton";
+import { MaeveContext, useMaeveContext } from "~~/hooks/maeve";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth/useScaffoldReadContract";
-import { MAEVE_TOKENS, MaeveTokenConfig, formatBpsAsPercent, formatToken, useMaeveTokens } from "~~/utils/maeve";
+import { MAEVE_TOKENS, MAX_UINT256, MaeveTokenConfig, formatBpsAsPercent, formatToken } from "~~/utils/maeve";
 
 type LoanStruct = {
   borrower: `0x${string}`;
@@ -19,15 +19,14 @@ type LoanStruct = {
 };
 
 const Borrow: NextPage = () => {
-  const { address: user } = useAccount();
-  const { entries, byAddress } = useMaeveTokens();
+  const ctx = useMaeveContext();
   const [borrowSymbol, setBorrowSymbol] = useState(MAEVE_TOKENS[0].symbol);
   const [borrowAmount, setBorrowAmount] = useState("");
   const [collateralSymbol, setCollateralSymbol] = useState(MAEVE_TOKENS[1].symbol);
   const [collateralAmount, setCollateralAmount] = useState("");
 
-  const borrowEntry = entries.find(e => e.config.symbol === borrowSymbol);
-  const collateralEntry = entries.find(e => e.config.symbol === collateralSymbol);
+  const borrowEntry = ctx.entries.find(e => e.config.symbol === borrowSymbol);
+  const collateralEntry = ctx.entries.find(e => e.config.symbol === collateralSymbol);
 
   const { data: effLtvBps } = useScaffoldReadContract({
     contractName: "MaevePool",
@@ -49,28 +48,90 @@ const Borrow: NextPage = () => {
     functionName: "nextLoanId",
   });
 
-  // Required collateral derived client-side: required = borrowAmount * 10000 / effLtvBps
-  // (matches the on-chain formula in MaevePool.borrow). 1:1 price assumption applies.
-  let requiredCollateralLabel: React.ReactNode = "—";
   let parsedBorrow: bigint | undefined;
   try {
     if (borrowAmount && Number(borrowAmount) > 0) parsedBorrow = parseUnits(borrowAmount, 18);
   } catch {
-    /* ignore parse error */
+    /* ignore */
   }
+  let parsedCollateral: bigint | undefined;
+  try {
+    if (collateralAmount && Number(collateralAmount) > 0) parsedCollateral = parseUnits(collateralAmount, 18);
+  } catch {
+    /* ignore */
+  }
+
+  // required = borrowAmount * 10000 / effLtvBps (matches on-chain formula).
+  let requiredCollateral: bigint | undefined;
+  if (parsedBorrow !== undefined && effLtvBps !== undefined) {
+    const ltv = effLtvBps as bigint;
+    if (ltv > 0n) requiredCollateral = (parsedBorrow * 10000n) / ltv;
+  }
+
+  let requiredCollateralLabel: React.ReactNode = "—";
   if (effLtvBps !== undefined) {
     const ltv = effLtvBps as bigint;
     if (ltv === 0n) {
       requiredCollateralLabel = "no lender accepts pair";
-    } else if (parsedBorrow !== undefined) {
-      const required = (parsedBorrow * 10000n) / ltv;
-      requiredCollateralLabel = `${formatToken(required)} ${collateralSymbol}`;
+    } else if (requiredCollateral !== undefined) {
+      requiredCollateralLabel = `${formatToken(requiredCollateral)} ${collateralSymbol}`;
     }
   } else {
     requiredCollateralLabel = <Skeleton width="5rem" />;
   }
 
   const totalLoans = nextLoanId !== undefined ? Number(nextLoanId) : undefined;
+
+  // --- Borrow tx state ---
+  const collateralCN = collateralEntry?.config.contractName;
+  const collateralAllowance = collateralCN ? ctx.allowance[collateralCN] : undefined;
+  const collateralBalance = collateralCN ? ctx.balance[collateralCN] : undefined;
+  const collateralWriter = collateralCN ? ctx.tokenWrites[collateralCN] : undefined;
+
+  const insufficientCollateralBal =
+    parsedCollateral !== undefined && collateralBalance !== undefined && parsedCollateral > collateralBalance;
+  const needsCollateralApproval =
+    parsedCollateral !== undefined && (collateralAllowance === undefined || collateralAllowance < parsedCollateral);
+
+  const undercollateralized =
+    parsedCollateral !== undefined && requiredCollateral !== undefined && parsedCollateral < requiredCollateral;
+  const insufficientLiquidity =
+    parsedBorrow !== undefined && availLiquidity !== undefined && parsedBorrow > (availLiquidity as bigint);
+  const noPair = effLtvBps !== undefined && (effLtvBps as bigint) === 0n;
+
+  const onApproveCollateral = async () => {
+    if (!collateralWriter || !ctx.poolAddress) return;
+    try {
+      await collateralWriter.writeContractAsync({
+        functionName: "approve",
+        args: [ctx.poolAddress, MAX_UINT256],
+      });
+    } catch {
+      /* error toast surfaced */
+    }
+  };
+
+  const onBorrow = async () => {
+    if (!parsedBorrow || !parsedCollateral || !borrowEntry?.address || !collateralEntry?.address) return;
+    try {
+      await ctx.poolWrite.writeContractAsync({
+        functionName: "borrow",
+        args: [borrowEntry.address, parsedBorrow, collateralEntry.address, parsedCollateral],
+      });
+      setBorrowAmount("");
+      setCollateralAmount("");
+    } catch {
+      /* error toast surfaced */
+    }
+  };
+
+  const fillRequiredCollateral = () => {
+    if (requiredCollateral !== undefined) setCollateralAmount(formatUnits(requiredCollateral, 18));
+  };
+
+  const isSamePair = borrowSymbol === collateralSymbol;
+  const isMining = ctx.poolWrite.isMining;
+  const isApproving = collateralWriter?.isMining ?? false;
 
   return (
     <div className="flex flex-col grow w-full max-w-7xl mx-auto px-6 py-12 gap-10">
@@ -93,7 +154,7 @@ const Borrow: NextPage = () => {
                 onChange={e => setBorrowSymbol(e.target.value)}
                 className="maeve-input w-full px-3 py-3 text-base"
               >
-                {entries.map(e => (
+                {ctx.entries.map(e => (
                   <option key={e.config.contractName} value={e.config.symbol}>
                     {e.config.symbol}
                   </option>
@@ -115,7 +176,7 @@ const Borrow: NextPage = () => {
                 onChange={e => setCollateralSymbol(e.target.value)}
                 className="maeve-input w-full px-3 py-3 text-base"
               >
-                {entries.map(e => (
+                {ctx.entries.map(e => (
                   <option key={e.config.contractName} value={e.config.symbol}>
                     {e.config.symbol}
                   </option>
@@ -123,18 +184,72 @@ const Borrow: NextPage = () => {
               </select>
             </Field>
             <Field label="Collateral Amount">
-              <input
-                type="text"
-                placeholder="0.00"
-                value={collateralAmount}
-                onChange={e => setCollateralAmount(e.target.value)}
-                className="maeve-input w-full px-3 py-3 text-base"
-              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="0.00"
+                  value={collateralAmount}
+                  onChange={e => setCollateralAmount(e.target.value)}
+                  className="maeve-input flex-1 px-3 py-3 text-base"
+                />
+                <button
+                  type="button"
+                  onClick={fillRequiredCollateral}
+                  disabled={requiredCollateral === undefined}
+                  className="text-[10px] font-mono uppercase tracking-[0.2em] text-primary hover:opacity-80 px-2 disabled:opacity-30"
+                >
+                  Use min
+                </button>
+              </div>
+              <div className="mt-1 text-[10px] font-mono uppercase tracking-[0.2em] text-base-content/40">
+                Wallet:{" "}
+                <span className="tabular-nums text-base-content/70">
+                  {collateralBalance !== undefined ? `${formatToken(collateralBalance)} ${collateralSymbol}` : "—"}
+                </span>
+              </div>
             </Field>
             <div className="md:col-span-2">
-              <button className="btn btn-primary w-full font-mono uppercase tracking-[0.2em] text-xs" disabled>
-                Borrow
-              </button>
+              {!ctx.user ? (
+                <button className="btn btn-primary w-full font-mono uppercase tracking-[0.2em] text-xs" disabled>
+                  Connect wallet
+                </button>
+              ) : isSamePair ? (
+                <button className="btn btn-warning w-full font-mono uppercase tracking-[0.2em] text-xs" disabled>
+                  Pick different borrow / collateral tokens
+                </button>
+              ) : noPair ? (
+                <button className="btn btn-warning w-full font-mono uppercase tracking-[0.2em] text-xs" disabled>
+                  No lender accepts this pair
+                </button>
+              ) : insufficientLiquidity ? (
+                <button className="btn btn-warning w-full font-mono uppercase tracking-[0.2em] text-xs" disabled>
+                  Insufficient pool liquidity
+                </button>
+              ) : insufficientCollateralBal ? (
+                <button className="btn btn-warning w-full font-mono uppercase tracking-[0.2em] text-xs" disabled>
+                  Insufficient {collateralSymbol} balance
+                </button>
+              ) : undercollateralized ? (
+                <button className="btn btn-warning w-full font-mono uppercase tracking-[0.2em] text-xs" disabled>
+                  Collateral below required minimum
+                </button>
+              ) : needsCollateralApproval ? (
+                <button
+                  className="btn btn-primary w-full font-mono uppercase tracking-[0.2em] text-xs"
+                  disabled={!parsedCollateral || isApproving}
+                  onClick={onApproveCollateral}
+                >
+                  {isApproving ? "Approving…" : `Approve ${collateralSymbol}`}
+                </button>
+              ) : (
+                <button
+                  className="btn btn-primary w-full font-mono uppercase tracking-[0.2em] text-xs"
+                  disabled={!parsedBorrow || !parsedCollateral || isMining}
+                  onClick={onBorrow}
+                >
+                  {isMining ? "Borrowing…" : "Borrow"}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -179,54 +294,39 @@ const Borrow: NextPage = () => {
       <section className="maeve-card p-6">
         <h2 className="text-[10px] font-mono uppercase tracking-[0.3em] text-base-content/50 mb-5">My Loans</h2>
         {/* HACKATHON: O(n) loan scan. Real app uses a subgraph or indexed events. */}
-        {!user ? (
+        {!ctx.user ? (
           <EmptyPanel label="Connect your wallet to view loans" />
         ) : totalLoans === undefined ? (
           <EmptyPanel label="Loading..." />
         ) : totalLoans === 0 ? (
           <EmptyPanel label="No loans yet" />
         ) : (
-          <MyLoansList user={user as `0x${string}`} totalLoans={totalLoans} byAddress={byAddress} />
+          <MyLoansList ctx={ctx} totalLoans={totalLoans} />
         )}
       </section>
     </div>
   );
 };
 
-function MyLoansList({
-  user,
-  totalLoans,
-  byAddress,
-}: {
-  user: `0x${string}`;
-  totalLoans: number;
-  byAddress: Map<string, MaeveTokenConfig>;
-}) {
+function MyLoansList({ ctx, totalLoans }: { ctx: MaeveContext; totalLoans: number }) {
   return (
     <div className="flex flex-col">
       <div className="hidden md:grid grid-cols-12 gap-4 pb-3 text-[10px] font-mono uppercase tracking-[0.3em] text-base-content/40 border-b border-white/5">
         <div className="col-span-1">#</div>
-        <div className="col-span-3">Borrowed</div>
-        <div className="col-span-3">Collateral</div>
+        <div className="col-span-2">Borrowed</div>
+        <div className="col-span-2">Collateral</div>
         <div className="col-span-3">Owed Now</div>
-        <div className="col-span-2 text-right">Opened</div>
+        <div className="col-span-2">Opened</div>
+        <div className="col-span-2 text-right">Action</div>
       </div>
       {Array.from({ length: totalLoans }, (_, i) => (
-        <MaybeLoanRow key={i} loanId={BigInt(i)} user={user} byAddress={byAddress} />
+        <MaybeLoanRow key={i} loanId={BigInt(i)} ctx={ctx} />
       ))}
     </div>
   );
 }
 
-function MaybeLoanRow({
-  loanId,
-  user,
-  byAddress,
-}: {
-  loanId: bigint;
-  user: `0x${string}`;
-  byAddress: Map<string, MaeveTokenConfig>;
-}) {
+function MaybeLoanRow({ loanId, ctx }: { loanId: bigint; ctx: MaeveContext }) {
   const { data } = useScaffoldReadContract({
     contractName: "MaevePool",
     functionName: "getLoanDetails",
@@ -241,29 +341,87 @@ function MaybeLoanRow({
 
   if (!loan) return null;
   if (!loan.active) return null;
-  if (loan.borrower.toLowerCase() !== user.toLowerCase()) return null;
+  if (!ctx.user) return null;
+  if (loan.borrower.toLowerCase() !== (ctx.user as string).toLowerCase()) return null;
 
-  const borrowSymbol = byAddress.get(loan.borrowToken.toLowerCase())?.symbol ?? loan.borrowToken.slice(0, 6);
-  const collateralSymbol =
-    byAddress.get(loan.collateralToken.toLowerCase())?.symbol ?? loan.collateralToken.slice(0, 6);
+  const borrowConfig: MaeveTokenConfig | undefined = ctx.byAddress.get(loan.borrowToken.toLowerCase());
+  const collateralConfig: MaeveTokenConfig | undefined = ctx.byAddress.get(loan.collateralToken.toLowerCase());
+
+  const borrowSymbol = borrowConfig?.symbol ?? loan.borrowToken.slice(0, 6);
+  const collateralSymbol = collateralConfig?.symbol ?? loan.collateralToken.slice(0, 6);
   const opened = new Date(Number(loan.borrowTimestamp) * 1000).toLocaleDateString();
+
+  const owedAmount = (owed as bigint | undefined) ?? 0n;
+  const allowance = borrowConfig ? ctx.allowance[borrowConfig.contractName] : undefined;
+  const balance = borrowConfig ? ctx.balance[borrowConfig.contractName] : undefined;
+  const writer = borrowConfig ? ctx.tokenWrites[borrowConfig.contractName] : undefined;
+
+  const insufficientForRepay = balance !== undefined && balance < owedAmount;
+  const needsApproval = owedAmount > 0n && (allowance === undefined || allowance < owedAmount);
+
+  const onApprove = async () => {
+    if (!writer || !ctx.poolAddress) return;
+    try {
+      await writer.writeContractAsync({
+        functionName: "approve",
+        args: [ctx.poolAddress, MAX_UINT256],
+      });
+    } catch {
+      /* toast already surfaced */
+    }
+  };
+
+  const onRepay = async () => {
+    try {
+      await ctx.poolWrite.writeContractAsync({
+        functionName: "repay",
+        args: [loanId],
+      });
+    } catch {
+      /* toast already surfaced */
+    }
+  };
+
+  const isApproving = writer?.isMining ?? false;
+  const isRepaying = ctx.poolWrite.isMining;
 
   return (
     <div className="grid grid-cols-12 gap-4 py-4 items-center border-b border-white/5 last:border-b-0">
       <div className="col-span-1 font-mono text-base-content/40 text-xs">#{loanId.toString()}</div>
-      <div className="col-span-12 md:col-span-3 font-mono">
+      <div className="col-span-12 md:col-span-2 font-mono">
         <div className="tabular-nums">{formatToken(loan.borrowAmount)}</div>
         <div className="text-[10px] uppercase tracking-[0.2em] text-base-content/40 mt-0.5">{borrowSymbol}</div>
       </div>
-      <div className="col-span-12 md:col-span-3 font-mono">
+      <div className="col-span-12 md:col-span-2 font-mono">
         <div className="tabular-nums">{formatToken(loan.collateralAmount)}</div>
         <div className="text-[10px] uppercase tracking-[0.2em] text-base-content/40 mt-0.5">{collateralSymbol}</div>
       </div>
       <div className="col-span-12 md:col-span-3 font-mono text-primary tabular-nums">
-        {owed !== undefined ? `${formatToken(owed as bigint)} ${borrowSymbol}` : <Skeleton width="6rem" />}
+        {owed !== undefined ? `${formatToken(owedAmount)} ${borrowSymbol}` : <Skeleton width="6rem" />}
       </div>
-      <div className="col-span-12 md:col-span-2 text-right font-mono text-[10px] uppercase tracking-[0.2em] text-base-content/50">
+      <div className="col-span-12 md:col-span-2 font-mono text-[10px] uppercase tracking-[0.2em] text-base-content/50">
         {opened}
+      </div>
+      <div className="col-span-12 md:col-span-2 flex justify-end">
+        {insufficientForRepay ? (
+          <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-warning">low {borrowSymbol}</span>
+        ) : needsApproval ? (
+          <button
+            className="btn btn-sm btn-primary font-mono uppercase tracking-[0.2em] text-[10px]"
+            disabled={isApproving || !writer}
+            onClick={onApprove}
+          >
+            {isApproving ? "…" : "Approve"}
+          </button>
+        ) : (
+          <button
+            className="btn btn-sm btn-primary font-mono uppercase tracking-[0.2em] text-[10px]"
+            disabled={isRepaying || owedAmount === 0n}
+            onClick={onRepay}
+          >
+            {isRepaying ? "…" : "Repay"}
+          </button>
+        )}
       </div>
     </div>
   );
