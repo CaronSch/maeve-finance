@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { NextPage } from "next";
 import { parseUnits } from "viem";
+import { AiRiskAgent } from "~~/components/AiRiskAgent";
 import { Skeleton } from "~~/components/maeve/Skeleton";
 import { MaeveContext, useMaeveContext } from "~~/hooks/maeve";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth/useScaffoldReadContract";
@@ -69,6 +70,14 @@ const Lend: NextPage = () => {
         </div>
         <CollateralPrefsGrid ctx={ctx} depositEntry={depositEntry} />
       </section>
+
+      <div className="flex items-center gap-4 my-2">
+        <div className="flex-1 h-px bg-white/5" />
+        <span className="text-[10px] font-mono uppercase tracking-[0.4em] text-base-content/40">or let AI decide</span>
+        <div className="flex-1 h-px bg-white/5" />
+      </div>
+
+      <AiRiskAgent />
     </div>
   );
 };
