@@ -1,192 +1,199 @@
 # AGENTS.md
 
-This file provides guidance to coding agents working in this repository.
+Guidance for coding agents working in this repository.
 
 ## Project Overview
 
-Scaffold-ETH 2 (SE-2) is a starter kit for building dApps on Ethereum. It comes in **two flavors** based on the Solidity framework:
+**Maeve Finance** is a DeFi lending protocol where lenders explicitly opt in to which tokens they accept as collateral and at what max LTV. Borrowers see a live aggregate "credit score" per token derived from those preferences. A simulated AI Risk Agent (Claude) recommends per-pair settings based on the lender's risk tolerance.
 
-- **Hardhat flavor**: Uses `packages/hardhat` with hardhat-deploy plugin
-- **Foundry flavor**: Uses `packages/foundry` with Forge scripts
+This is a **hackathon build**: not audited, not production-ready, with shortcuts documented inline. See `README.md` for the user-facing description and the full shortcuts-vs-production table.
 
-Both flavors share the same frontend package:
+The repo is a Yarn workspaces monorepo built on **Scaffold-ETH 2** (Hardhat flavor):
 
-- **packages/nextjs**: React frontend (Next.js App Router, not Pages Router, RainbowKit, Wagmi, Viem, TypeScript, Tailwind CSS with DaisyUI)
+- `packages/hardhat/` — Solidity 0.8.30 + OpenZeppelin 5, hardhat-deploy
+- `packages/nextjs/` — Next.js 15 (App Router) + React 19 + Tailwind v4 + DaisyUI 5, wagmi 2 + viem + RainbowKit
 
-### Detecting Which Flavor You're Using
+## Build summary (current state)
 
-Check which package exists in the repository:
+The protocol was built in nine phases plus a polish pass. Today it has:
 
-- If `packages/hardhat` exists → **Hardhat flavor** (follow Hardhat instructions)
-- If `packages/foundry` exists → **Foundry flavor** (follow Foundry instructions)
+- **`MaevePool.sol`** — `deposit`, `withdraw`, `setCollateralPreference`, `borrow`, `repay`, plus views: `getEffectiveLTV`, `getPairAcceptance`, `getTokenCreditScore`, `getAllTokenScores`, `getLoanDetails`, `getOutstandingDebt`, `getAvailableLiquidity`. `Ownable`-gated `addSupportedToken` (overloaded: with explicit rate, or no-arg using the default). 26 tests.
+- **`MockERC20.sol`** — minimal OZ ERC20 with public `mint`. Three deployments: `MockUSDC`, `MockWETH`, `MockWBTC` (all 18 decimals — flagged shortcut).
+- **Frontend** — `/` (dashboard with stats, credit-score cards, How It Works, faucet), `/lend` (deposit + collateral prefs + AI Risk Agent), `/borrow` (open position + my loans), `/scores` (circular-gauge leaderboard).
+- **AI Risk Agent** — Next.js API route at `/api/ai-risk-agent` calling Claude `claude-opus-4-7`, with a deterministic stub fallback when `ANTHROPIC_API_KEY` is unset.
 
 ## Common Commands
 
-Commands work the same for both flavors unless noted otherwise:
-
 ```bash
-# Development workflow (run each in separate terminal)
-yarn chain          # Start local blockchain (Hardhat or Anvil)
-yarn deploy         # Deploy contracts to local network
+# Development workflow (run each in a separate terminal)
+yarn chain          # Start local hardhat node
+yarn deploy         # Deploy MockERC20s + MaevePool to local network
 yarn start          # Start Next.js frontend at http://localhost:3000
 
 # Code quality
 yarn lint           # Lint both packages
 yarn format         # Format both packages
+yarn next:check-types
+                    # Frontend TypeScript check (run from packages/nextjs)
 
-# Building
-yarn next:build     # Build frontend
-yarn compile        # Compile Solidity contracts
+# Contracts
+yarn compile        # Compile Solidity
+yarn test           # Run hardhat tests (run from packages/hardhat)
 
-# Contract verification (works for both)
-yarn verify --network <network>
+# End-to-end exercise of the on-chain path
+cd packages/hardhat && yarn hardhat run scripts/fullFlow.ts --network localhost
 
-# Account management (works for both)
-yarn generate            # Generate new deployer account
-yarn account:import      # Import existing private key
-yarn account             # View current account info
+# Reset deployments (after contract changes)
+rm -rf packages/hardhat/deployments/localhost && yarn deploy
 
-# Deploy to live network
-yarn deploy --network <network>   # e.g., sepolia, mainnet, base
-
-yarn vercel:yolo --prod # for deployment of frontend
+# Deploy to a live network
+yarn deploy --network <network>      # e.g., sepolia, base
+yarn vercel:yolo --prod              # frontend deployment
 ```
 
-## Architecture
+## Repo Layout
 
-### Smart Contract Development
+```
+packages/
+├── hardhat/
+│   ├── contracts/
+│   │   ├── MaevePool.sol         # core protocol
+│   │   └── MockERC20.sol         # mock tokens (mUSDC, mWETH, mWBTC)
+│   ├── deploy/
+│   │   ├── 01_deploy_mocks.ts
+│   │   └── 02_deploy_maeve.ts
+│   ├── test/MaevePool.ts         # 26 tests
+│   └── scripts/fullFlow.ts       # scripted end-to-end exercise
+└── nextjs/
+    ├── app/
+    │   ├── page.tsx              # dashboard
+    │   ├── lend/page.tsx
+    │   ├── borrow/page.tsx
+    │   ├── scores/page.tsx
+    │   └── api/ai-risk-agent/    # Claude proxy + stub
+    ├── components/
+    │   ├── AiRiskAgent.tsx
+    │   └── maeve/
+    │       ├── CircularGauge.tsx
+    │       └── Skeleton.tsx
+    ├── hooks/maeve.ts            # central token+pool reads/writes
+    └── utils/maeve.ts            # token config + formatters
+```
 
-#### Hardhat Flavor
+After `yarn deploy`, ABIs are auto-generated to `packages/nextjs/contracts/deployedContracts.ts`.
+
+## Smart Contract Development
 
 - Contracts: `packages/hardhat/contracts/`
-- Deployment scripts: `packages/hardhat/deploy/` (uses hardhat-deploy plugin)
+- Deploy scripts: `packages/hardhat/deploy/` (hardhat-deploy plugin)
 - Tests: `packages/hardhat/test/`
 - Config: `packages/hardhat/hardhat.config.ts`
-- Deploying specific contract:
-  - If the deploy script has:
-    ```typescript
-    // In packages/hardhat/deploy/01_deploy_my_contract.ts
-    deployMyContract.tags = ["MyContract"];
-    ```
-  - `yarn deploy --tags MyContract`
-  - **Gas limit in deploy scripts**: Manual post-deploy calls (e.g. `transferOwnership`, `grantRole`, `initialize`) can silently inherit `blockGasLimit` as their gas cap, causing failures. **Fix at the call site, not in `hardhat.config.ts`:**
-    ```typescript
-    // Preferred: estimateGas + 20% margin
-    const gas = await myContract.myMethod.estimateGas(arg1, arg2);
-    await myContract.myMethod(arg1, arg2, { gasLimit: (gas * 120n) / 100n });
+- Deploy a specific contract via tags: `yarn deploy --tags MaevePool`
+- **Manual post-deploy calls** (e.g. `transferOwnership`, `grantRole`, `initialize`) can silently inherit `blockGasLimit` (30M) as their gas cap, which exceeds the localhost per-tx cap (~16.7M) and fails. **Fix at the call site, not in `hardhat.config.ts`:**
 
-    // Or: explicit limit for simple admin calls
-    await myContract.transferOwnership(newOwner, { gasLimit: 100_000 });
-    ```
+  ```typescript
+  // Preferred: estimateGas + 20% margin
+  const gas = await myContract.myMethod.estimateGas(arg1, arg2);
+  await myContract.myMethod(arg1, arg2, { gasLimit: (gas * 120n) / 100n });
 
-#### Foundry Flavor
+  // Or: explicit limit for simple admin calls
+  await myContract.transferOwnership(newOwner, { gasLimit: 100_000 });
+  ```
 
-- Contracts: `packages/foundry/contracts/`
-- Deployment scripts: `packages/foundry/script/` (uses custom deployment strategy)
-  - Example: `packages/foundry/script/Deploy.s.sol` and `packages/foundry/script/DeployYourContract.s.sol`
-- Tests: `packages/foundry/test/`
-- Config: `packages/foundry/foundry.toml`
-- Deploying a specific contract:
-  - Create a separate deployment script and run `yarn deploy --file DeployYourContract.s.sol`
+  This repo's deploy scripts use `hre.deployments.execute(...)` (which estimates correctly), and `scripts/fullFlow.ts` passes explicit `{gasLimit: 1_000_000n}` per call.
 
-#### Both Flavors
+- **TypeChain overloaded functions** generate signature-keyed methods. After we added the `addSupportedToken(address)` overload, the unqualified `pool.addSupportedToken(...)` shorthand started throwing "ambiguous function description" in ethers v6. Use the explicit selector:
 
-- After `yarn deploy`, ABIs are auto-generated to `packages/nextjs/contracts/deployedContracts.ts`
+  ```typescript
+  await pool["addSupportedToken(address,uint256)"](token, rate);
+  await pool["addSupportedToken(address)"](token);
 
-### Frontend Contract Interaction
+  // Same in deploy scripts:
+  await execute("MaevePool", opts, "addSupportedToken(address,uint256)", token, rate);
+  ```
 
-**Correct interact hook names (use these):**
+## Frontend Contract Interaction
 
-- `useScaffoldReadContract` - NOT ~~useScaffoldContractRead~~
-- `useScaffoldWriteContract` - NOT ~~useScaffoldContractWrite~~
+Always use the Scaffold-ETH hooks in `packages/nextjs/hooks/scaffold-eth/` for contract reads and writes:
 
-Contract data is read from two files in `packages/nextjs/contracts/`:
+- `useScaffoldReadContract` — read view/pure functions
+- `useScaffoldWriteContract` — write to non-payable / payable functions
+- `useScaffoldEventHistory`, `useScaffoldWatchContractEvent`, `useDeployedContractInfo`, `useScaffoldContract`, `useTransactor` — other surfaces
 
-- `deployedContracts.ts`: Auto-generated from deployments
-- `externalContracts.ts`: Manually added external contracts
+These hooks need a **literal contract name**, so dynamic dispatch (looping over a list of tokens) doesn't work directly. The pattern in this repo is `useMaeveContext()` in `hooks/maeve.ts`: it instantiates the per-token reads/writes for `MockUSDC` / `MockWETH` / `MockWBTC` once, then exposes them as a `Record<contractName, ...>` for callers to dispatch by selected symbol. **Don't try to loop `useScaffoldReadContract` calls** — extend `useMaeveContext` instead.
 
-#### Reading Contract Data
+Reading example:
 
 ```typescript
-const { data: totalCounter } = useScaffoldReadContract({
-  contractName: "YourContract",
-  functionName: "userGreetingCounter",
-  args: ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045"],
+const { data: totalDeposited } = useScaffoldReadContract({
+  contractName: "MaevePool",
+  functionName: "totalDeposited",
+  args: [tokenAddress],
 });
 ```
 
-#### Writing to Contracts
+Writing example (note `useTransactor` surfaces toasts automatically — don't reimplement):
 
 ```typescript
-const { writeContractAsync, isPending } = useScaffoldWriteContract({
-  contractName: "YourContract",
+const { writeContractAsync, isMining } = useScaffoldWriteContract({
+  contractName: "MaevePool",
 });
 
 await writeContractAsync({
-  functionName: "setGreeting",
-  args: [newGreeting],
-  value: parseEther("0.01"), // for payable functions
+  functionName: "deposit",
+  args: [tokenAddress, amount],
 });
 ```
 
-#### Reading Events
+Contract address/ABI data is read from two files in `packages/nextjs/contracts/`:
 
-```typescript
-const { data: events, isLoading } = useScaffoldEventHistory({
-  contractName: "YourContract",
-  eventName: "GreetingChange",
-  watch: true,
-  fromBlock: 31231n,
-  blockData: true,
-});
-```
+- `deployedContracts.ts` — auto-generated from deployments
+- `externalContracts.ts` — manually added external contracts
 
-SE-2 also provides other hooks to interact with blockchain data: `useScaffoldWatchContractEvent`, `useScaffoldEventHistory`, `useDeployedContractInfo`, `useScaffoldContract`, `useTransactor`.
+## Anthropic SDK conventions
 
-**IMPORTANT: Always use hooks from `packages/nextjs/hooks/scaffold-eth` for contract interactions. Always refer to the hook names as they exist in the codebase.**
+- `@anthropic-ai/sdk` is at `latest` (≥ 0.91) — older versions (0.40) lack adaptive thinking and structured outputs.
+- Default model: `claude-opus-4-7`.
+- **Server-side only** — `/api/ai-risk-agent/route.ts` is a Next.js API route. **Never call `api.anthropic.com` from the browser** (CORS + key leak).
+- Stub fallback exists so the demo runs without a key. Same JSON shape, deterministic rules. The frontend should never branch on `source` — that field is for telemetry/UI badge only.
+- Prompt caching opt-in is present on the system block but unlikely to fire (the system prompt is ~500 tokens, below the 4096-token minimum cacheable prefix on Opus 4.7).
+- To enable live Claude: `echo 'ANTHROPIC_API_KEY=sk-ant-...' > packages/nextjs/.env.local && yarn start`.
 
-### UI Components
+## UI Components
 
-**Always use `@scaffold-ui/components` library for web3 UI components:**
+- `@scaffold-ui/components` provides `Address`, `AddressInput`, `Balance`, `EtherInput`, `IntegerInput`. Use these for web3-flavored inputs and displays rather than rolling your own.
+- Notifications: `notification.{success,error,warning,info,loading}` from `~~/utils/scaffold-eth`. Use `getParsedError` for human-readable error messages.
+- `useTransactor` (already wrapped inside `useScaffoldWriteContract`) surfaces tx-pending and tx-confirmed toasts automatically — don't reimplement.
 
-- `Address`: Display ETH addresses with ENS resolution, blockie avatars, and explorer links
-- `AddressInput`: Input field with address validation and ENS resolution
-- `Balance`: Show ETH balance in ether and USD
-- `EtherInput`: Number input with ETH/USD conversion toggle
-- `IntegerInput`: Integer-only input with wei conversion
+## Styling
 
-### Notifications & Error Handling
-
-Use `notification` from `~~/utils/scaffold-eth` for success/error/warning feedback and `getParsedError` for readable error messages.
-
-### Styling
-
-**Use DaisyUI classes** for building frontend components.
+Use DaisyUI semantic classes for components, with the custom Maeve dark palette already wired into `packages/nextjs/styles/globals.css`.
 
 ```tsx
-// ✅ Good - using DaisyUI classes
-<button className="btn btn-primary">Connect</button>
-<div className="card bg-base-100 shadow-xl">...</div>
+// ✅ Good — DaisyUI semantic classes
+<button className="btn btn-primary">Deposit</button>
+<div className="maeve-card p-6">…</div>
 
-// ❌ Avoid - raw Tailwind when DaisyUI has a component
-<button className="px-4 py-2 bg-blue-500 text-white rounded">Connect</button>
+// ❌ Avoid — raw Tailwind when DaisyUI has a component
+<button className="px-4 py-2 bg-blue-500 text-white rounded">Deposit</button>
 ```
 
-### Configure Target Network before deploying to testnet / mainnet.
+Conventions established in this repo:
 
-#### Hardhat
+- **Color palette:** primary emerald `#2dd4a8`, base-100 `#0f0f1a`, base-200 `#0a0a0f`, warning `#f59e0b`, error `#ef4444`. Use the DaisyUI semantic names (`text-primary`, `bg-base-100`, etc.) — don't hardcode hex except for inline `style={}` on subtle borders (`rgba(255,255,255,0.06)` is the convention).
+- **Typography:** `font-mono` for numbers/data/labels (uppercase `tracking-[0.2em]` for label conventions), `font-light` for headings, `tabular-nums` everywhere a number renders.
+- **Reusable utility classes** (defined in `globals.css`): `maeve-card`, `maeve-card-hover`, `maeve-divider`, `maeve-input`, `maeve-stagger`, `tabular-nums`.
 
-Add networks in `packages/hardhat/hardhat.config.ts` if not present.
+## Conventions established this session
 
-#### Foundry
+- **Tokens are configured via a single literal-keyed array** (`MAEVE_TOKENS` in `utils/maeve.ts`). Every per-token read/write hook is instantiated three times in `useMaeveContext()` and dispatched by `contractName`.
+- **Loan list:** O(n) client-side scan from `0..nextLoanId`; each row reads `getLoanDetails` + `getOutstandingDebt` and self-filters by borrower/active. Acceptable for the demo, replace with a subgraph for real.
+- **Withdraw doesn't need approve** (the pool moves its own balance back). Only `deposit`, `borrow` (collateral side), and `repay` (borrow-token side) need the approve→action two-step.
+- **Repay race:** interest accrues per block, so an exact-amount approval can race the repay tx (saw this in `fullFlow.ts`). The UI uses max-approve (`MAX_UINT256`); if rebuilding, mirror that pattern.
+- **Collateral pref writes are debounced 500ms** with a `dirty` flag pattern: local state syncs from on-chain only when `!dirty`, and the debounced write clears `dirty` on success/failure. Don't refactor the cards to fire on every keystroke — it'll spam txs.
+- **Token decimals:** all mocks use 18 (flagged shortcut). Real USDC is 6, real WBTC is 8.
 
-Add RPC endpoints in `packages/foundry/foundry.toml` if not present.
-
-#### NextJs
-
-Add networks in `packages/nextjs/scaffold.config.ts` if not present. This file also contains configuration for polling interval, API keys. Remember to decrease the polling interval for L2 chains.
-
-## Code Style Guide
+## Code Style
 
 ### Identifiers
 
@@ -195,9 +202,9 @@ Add networks in `packages/nextjs/scaffold.config.ts` if not present. This file a
 | `UpperCamelCase` | class / interface / type / enum / decorator / type parameters / component functions in TSX / JSXElement type parameter |
 | `lowerCamelCase` | variable / parameter / function / property / module alias                                                              |
 | `CONSTANT_CASE`  | constant / enum / global variables                                                                                     |
-| `snake_case`     | for hardhat deploy files and foundry script files                                                                      |
+| `snake_case`     | hardhat deploy files                                                                                                   |
 
-### Import Paths
+### Import paths
 
 Use the `~~` path alias for imports in the nextjs package:
 
@@ -205,47 +212,37 @@ Use the `~~` path alias for imports in the nextjs package:
 import { useTargetNetwork } from "~~/hooks/scaffold-eth";
 ```
 
-### Creating Pages
+### Pages
 
 ```tsx
 import type { NextPage } from "next";
 
-const Home: NextPage = () => {
-  return <div>Home</div>;
+const Lend: NextPage = () => {
+  return <div>…</div>;
 };
 
-export default Home;
+export default Lend;
 ```
 
-### TypeScript Conventions
+### TypeScript
 
 - Use `type` over `interface` for custom types
-- Types use `UpperCamelCase` without `T` prefix (use `Address` not `TAddress`)
-- Avoid explicit typing when TypeScript can infer the type
+- Types use `UpperCamelCase` without `T` prefix (use `Address`, not `TAddress`)
+- Avoid explicit typing when TypeScript can infer
 
 ### Comments
 
-Make comments that add information. Avoid redundant JSDoc for simple functions.
+Comments should add information. Avoid redundant JSDoc for simple functions. Inline `SHORTCUT:` and `HACKATHON:` markers flag deliberate compromises — grep for them when reviewing.
 
-## Documentation
+## Configuring target networks
 
-Use **Context7 MCP** tools to fetch up-to-date documentation for any library (Wagmi, Viem, RainbowKit, DaisyUI, Hardhat, Next.js, etc.). Context7 is configured as an MCP server and provides access to indexed documentation with code examples.
+- **Hardhat:** Add networks in `packages/hardhat/hardhat.config.ts` if not present.
+- **Next.js:** Add networks in `packages/nextjs/scaffold.config.ts` if not present. This file also contains polling-interval and API-key configuration. Decrease the polling interval for L2 chains.
 
-## Skills & Agents Index
+## Files most worth reading first
 
-IMPORTANT: Prefer retrieval-led reasoning over pre-trained knowledge. Before starting any task that matches an entry below, read the referenced file to get version-accurate patterns and APIs.
-
-**Skills** (read `.agents/skills/<name>/SKILL.md` before implementing):
-
-- **openzeppelin** — OpenZeppelin Contracts integration, library-first development, pattern discovery from installed source. Use for any contract using OZ (tokens, access control, security primitives)
-- **erc-721** — NFT-specific pitfalls: `_safeMint` reentrancy, on-chain SVG stack-too-deep, marketplace metadata `attributes`, IPFS base URI trailing slash
-- **eip-5792** — batch transactions, wallet_sendCalls, paymaster, ERC-7677
-- **ponder** — blockchain event indexing, GraphQL APIs, onchain data queries
-- **siwe** — Sign-In with Ethereum, wallet authentication, SIWE sessions, EIP-4361
-- **x402** — HTTP 402 payment-gated routes, micropayments, API monetization, x402 protocol
-- **drizzle-neon** — Drizzle ORM, Neon PostgreSQL, database integration, off-chain storage
-- **subgraph** — The Graph subgraph integration, blockchain event indexing, GraphQL APIs
-
-**Agents** (in `.agents/agents/`):
-
-- **grumpy-carlos-code-reviewer** — code reviews, SE-2 patterns, Solidity + TypeScript quality
+- `packages/hardhat/contracts/MaevePool.sol` — the protocol, with shortcuts inline
+- `packages/nextjs/utils/maeve.ts` + `packages/nextjs/hooks/maeve.ts` — central frontend wiring
+- `packages/nextjs/app/api/ai-risk-agent/route.ts` — Claude integration + stub
+- `packages/hardhat/scripts/fullFlow.ts` — proves the on-chain path works end-to-end
+- `README.md` — user-facing description, architecture diagram, shortcuts vs. production
