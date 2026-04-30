@@ -86,6 +86,15 @@ contract MaevePool is Ownable {
         uint256 maxLTV,
         bool active
     );
+    event Borrowed(
+        address indexed borrower,
+        uint256 indexed loanId,
+        address borrowToken,
+        uint256 borrowAmount,
+        address collateralToken,
+        uint256 collateralAmount
+    );
+    event Repaid(address indexed borrower, uint256 indexed loanId, uint256 totalOwed);
 
     constructor(address _owner) Ownable(_owner) {
         defaultInterestRateBps = 500; // 5%
@@ -191,5 +200,87 @@ contract MaevePool is Ownable {
         }
         if (count == 0) return 0;
         return sum / count;
+    }
+
+    function getLoanDetails(uint256 loanId) public view returns (Loan memory) {
+        return loans[loanId];
+    }
+
+    function getOutstandingDebt(uint256 loanId) public view returns (uint256) {
+        Loan storage l = loans[loanId];
+        if (!l.active) return 0;
+        uint256 timeElapsed = block.timestamp - l.borrowTimestamp;
+        uint256 rate = interestRateBps[l.borrowToken];
+        uint256 interest = (l.borrowAmount * rate * timeElapsed) / (10000 * 365 days);
+        return l.borrowAmount + interest;
+    }
+
+    // --- Borrower flows ---
+
+    function borrow(
+        address borrowToken,
+        uint256 borrowAmount,
+        address collateralToken,
+        uint256 collateralAmount
+    ) external {
+        require(supportedTokens[borrowToken], "borrow token not supported");
+        require(supportedTokens[collateralToken], "collateral token not supported");
+        require(borrowAmount > 0, "zero borrow");
+        require(collateralAmount > 0, "zero collateral");
+
+        uint256 effectiveLTV = getEffectiveLTV(borrowToken, collateralToken);
+        require(effectiveLTV > 0, "no lender accepts collateral");
+
+        // HACKATHON: Using 1:1 price assumption. Real protocol needs Chainlink/Pyth
+        // oracle for cross-asset LTV calculation.
+        uint256 required = (borrowAmount * 10000) / effectiveLTV;
+        require(collateralAmount >= required, "collateral too low");
+
+        require(getAvailableLiquidity(borrowToken) >= borrowAmount, "insufficient liquidity");
+
+        // Effects before interactions.
+        uint256 loanId = nextLoanId++;
+        loans[loanId] = Loan({
+            borrower: msg.sender,
+            borrowToken: borrowToken,
+            borrowAmount: borrowAmount,
+            collateralToken: collateralToken,
+            collateralAmount: collateralAmount,
+            borrowTimestamp: block.timestamp,
+            active: true
+        });
+        totalBorrowed[borrowToken] += borrowAmount;
+
+        IERC20(collateralToken).safeTransferFrom(msg.sender, address(this), collateralAmount);
+        IERC20(borrowToken).safeTransfer(msg.sender, borrowAmount);
+
+        emit Borrowed(msg.sender, loanId, borrowToken, borrowAmount, collateralToken, collateralAmount);
+    }
+
+    function repay(uint256 loanId) external {
+        Loan storage l = loans[loanId];
+        require(l.active, "loan inactive");
+        require(l.borrower == msg.sender, "not borrower");
+
+        // SHORTCUT: full repay only -- partial repayment is not supported.
+        uint256 totalOwed = getOutstandingDebt(loanId);
+
+        address borrowToken = l.borrowToken;
+        address collateralToken = l.collateralToken;
+        uint256 borrowAmount = l.borrowAmount;
+        uint256 collateralAmount = l.collateralAmount;
+
+        // Effects before interactions.
+        l.active = false;
+        totalBorrowed[borrowToken] -= borrowAmount;
+
+        IERC20(borrowToken).safeTransferFrom(msg.sender, address(this), totalOwed);
+        IERC20(collateralToken).safeTransfer(msg.sender, collateralAmount);
+
+        // SHORTCUT: interest sits in the pool generically -- it is not routed back
+        // to specific lenders. TODO: route interest to lenders proportionally to
+        // their deposit and active collateral prefs at the time of the loan.
+
+        emit Repaid(msg.sender, loanId, totalOwed);
     }
 }
