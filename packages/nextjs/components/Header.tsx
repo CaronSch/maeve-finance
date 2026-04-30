@@ -1,30 +1,24 @@
 "use client";
 
 import React, { useRef } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { hardhat } from "viem/chains";
-import { Bars3Icon, BugAntIcon } from "@heroicons/react/24/outline";
+import { Bars3Icon } from "@heroicons/react/24/outline";
 import { FaucetButton, RainbowKitCustomConnectButton } from "~~/components/scaffold-eth";
 import { useOutsideClick, useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 type HeaderMenuLink = {
   label: string;
   href: string;
-  icon?: React.ReactNode;
 };
 
 export const menuLinks: HeaderMenuLink[] = [
-  {
-    label: "Home",
-    href: "/",
-  },
-  {
-    label: "Debug Contracts",
-    href: "/debug",
-    icon: <BugAntIcon className="h-4 w-4" />,
-  },
+  { label: "Dashboard", href: "/" },
+  { label: "Lend", href: "/lend" },
+  { label: "Borrow", href: "/borrow" },
+  { label: "Scores", href: "/scores" },
+  { label: "Debug", href: "/debug" },
 ];
 
 export const HeaderMenuLinks = () => {
@@ -32,7 +26,7 @@ export const HeaderMenuLinks = () => {
 
   return (
     <>
-      {menuLinks.map(({ label, href, icon }) => {
+      {menuLinks.map(({ label, href }) => {
         const isActive = pathname === href;
         return (
           <li key={href}>
@@ -40,11 +34,10 @@ export const HeaderMenuLinks = () => {
               href={href}
               passHref
               className={`${
-                isActive ? "bg-secondary shadow-md" : ""
-              } hover:bg-secondary hover:shadow-md focus:!bg-secondary active:!text-neutral py-1.5 px-3 text-sm rounded-full gap-2 grid grid-flow-col`}
+                isActive ? "text-primary" : "text-base-content/60 hover:text-base-content"
+              } font-mono text-xs uppercase tracking-[0.2em] py-1.5 px-3 rounded-md`}
             >
-              {icon}
-              <span>{label}</span>
+              {label}
             </Link>
           </li>
         );
@@ -53,9 +46,6 @@ export const HeaderMenuLinks = () => {
   );
 };
 
-/**
- * Site header
- */
 export const Header = () => {
   const { targetNetwork } = useTargetNetwork();
   const isLocalNetwork = targetNetwork.id === hardhat.id;
@@ -66,14 +56,18 @@ export const Header = () => {
   });
 
   return (
-    <div className="sticky lg:static top-0 navbar bg-base-100 min-h-0 shrink-0 justify-between z-20 shadow-md shadow-secondary px-0 sm:px-2">
+    <div
+      className="sticky lg:static top-0 navbar bg-base-100 min-h-0 shrink-0 justify-between z-20 px-0 sm:px-2"
+      style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+    >
       <div className="navbar-start w-auto lg:w-1/2">
         <details className="dropdown" ref={burgerMenuRef}>
           <summary className="ml-1 btn btn-ghost lg:hidden hover:bg-transparent">
             <Bars3Icon className="h-1/2" />
           </summary>
           <ul
-            className="menu menu-compact dropdown-content mt-3 p-2 shadow-sm bg-base-100 rounded-box w-52"
+            className="menu menu-compact dropdown-content mt-3 p-2 bg-base-100 rounded-box w-52"
+            style={{ border: "1px solid rgba(255,255,255,0.08)" }}
             onClick={() => {
               burgerMenuRef?.current?.removeAttribute("open");
             }}
@@ -81,20 +75,20 @@ export const Header = () => {
             <HeaderMenuLinks />
           </ul>
         </details>
-        <Link href="/" passHref className="hidden lg:flex items-center gap-2 ml-4 mr-6 shrink-0">
-          <div className="flex relative w-10 h-10">
-            <Image alt="SE2 logo" className="cursor-pointer" fill src="/logo.svg" />
-          </div>
-          <div className="flex flex-col">
-            <span className="font-bold leading-tight">Scaffold-ETH</span>
-            <span className="text-xs">Ethereum dev stack</span>
-          </div>
+        <Link href="/" passHref className="hidden lg:flex items-center ml-4 mr-10 shrink-0">
+          <span className="font-mono font-semibold text-base tracking-[0.4em] text-primary">MAEVE</span>
+          <span
+            className="font-mono text-[10px] tracking-[0.3em] uppercase text-base-content/30 ml-3 pl-3"
+            style={{ borderLeft: "1px solid rgba(255,255,255,0.08)" }}
+          >
+            v0
+          </span>
         </Link>
-        <ul className="hidden lg:flex lg:flex-nowrap menu menu-horizontal px-1 gap-2">
+        <ul className="hidden lg:flex lg:flex-nowrap menu menu-horizontal px-1 gap-1">
           <HeaderMenuLinks />
         </ul>
       </div>
-      <div className="navbar-end grow mr-4">
+      <div className="navbar-end grow mr-4 gap-2">
         <RainbowKitCustomConnectButton />
         {isLocalNetwork && <FaucetButton />}
       </div>
