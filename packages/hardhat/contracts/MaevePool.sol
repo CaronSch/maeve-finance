@@ -192,6 +192,17 @@ contract MaevePool is Ownable {
     }
 
     function getEffectiveLTV(address borrowToken, address collateralToken) public view returns (uint256) {
+        (uint256 avgLtv, ) = getPairAcceptance(borrowToken, collateralToken);
+        return avgLtv;
+    }
+
+    /// Returns the per-(deposit,collateral) acceptance: how many lenders in the
+    /// `borrowToken` pool currently accept `collateralToken` and the average max LTV
+    /// they're willing to offer. Same iteration as getEffectiveLTV, both pieces returned.
+    function getPairAcceptance(
+        address borrowToken,
+        address collateralToken
+    ) public view returns (uint256 avgLtv, uint256 numLenders) {
         // SHORTCUT: O(n) iteration over the borrowToken depositor list. Won't scale
         // past a handful of depositors. A production version would use a
         // deposit-weighted average and/or a governance-set parameter, and would
@@ -208,8 +219,8 @@ contract MaevePool is Ownable {
                 count += 1;
             }
         }
-        if (count == 0) return 0;
-        return sum / count;
+        if (count == 0) return (0, 0);
+        return (sum / count, count);
     }
 
     function getLoanDetails(uint256 loanId) public view returns (Loan memory) {

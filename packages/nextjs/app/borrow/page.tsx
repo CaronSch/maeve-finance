@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type { NextPage } from "next";
 import { formatUnits, parseUnits } from "viem";
 import { Skeleton } from "~~/components/maeve/Skeleton";
@@ -134,7 +135,7 @@ const Borrow: NextPage = () => {
   const isApproving = collateralWriter?.isMining ?? false;
 
   return (
-    <div className="flex flex-col grow w-full max-w-7xl mx-auto px-6 py-12 gap-10">
+    <div className="flex flex-col grow w-full max-w-7xl mx-auto px-4 sm:px-6 py-12 gap-10">
       <header>
         <div className="text-[10px] font-mono uppercase tracking-[0.4em] text-base-content/40 mb-2">borrow</div>
         <h1 className="text-3xl font-light">Borrow against your collateral.</h1>
@@ -207,6 +208,15 @@ const Borrow: NextPage = () => {
                   {collateralBalance !== undefined ? `${formatToken(collateralBalance)} ${collateralSymbol}` : "—"}
                 </span>
               </div>
+              {ctx.user && collateralBalance === 0n && (
+                <div className="mt-1 text-[10px] font-mono uppercase tracking-[0.2em] text-warning">
+                  No {collateralSymbol}.{" "}
+                  <Link href="/" className="underline hover:opacity-80">
+                    Mint from the dashboard faucet
+                  </Link>
+                  .
+                </div>
+              )}
             </Field>
             <div className="md:col-span-2">
               {!ctx.user ? (
