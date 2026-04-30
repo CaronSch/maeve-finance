@@ -4,6 +4,11 @@ import { useDeployedContractInfo } from "~~/hooks/scaffold-eth";
 // All mocks use 18 decimals — see SHORTCUT comment in 01_deploy_mocks.ts.
 export const TOKEN_DECIMALS = 18;
 
+// HACKATHON: infinite approve for UX speed. Never do this in prod -- a single
+// compromised contract drains the user's whole balance. Real apps approve the
+// exact amount per transaction or use ERC-2612 permit.
+export const MAX_UINT256 = (1n << 256n) - 1n;
+
 export type MaeveTokenConfig = {
   contractName: "MockUSDC" | "MockWETH" | "MockWBTC";
   symbol: string;

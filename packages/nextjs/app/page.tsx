@@ -2,12 +2,16 @@
 
 import Link from "next/link";
 import type { NextPage } from "next";
+import { parseUnits } from "viem";
 import { Skeleton } from "~~/components/maeve/Skeleton";
+import { useMaeveContext } from "~~/hooks/maeve";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth/useScaffoldReadContract";
-import { MaeveTokenEntry, bpsToPercentNumber, formatBpsAsPercent, formatToken, useMaeveTokens } from "~~/utils/maeve";
+import { MaeveTokenEntry, bpsToPercentNumber, formatBpsAsPercent, formatToken } from "~~/utils/maeve";
+
+const FAUCET_AMOUNT = parseUnits("10000", 18);
 
 const Dashboard: NextPage = () => {
-  const { entries } = useMaeveTokens();
+  const { entries, tokenWrites, user, balance } = useMaeveContext();
   const { data: nextLoanId } = useScaffoldReadContract({
     contractName: "MaevePool",
     functionName: "nextLoanId",
@@ -51,6 +55,34 @@ const Dashboard: NextPage = () => {
             <TokenScoreCard key={e.config.contractName} entry={e} />
           ))}
         </div>
+      </section>
+
+      <section className="maeve-card p-6">
+        <div className="flex items-baseline justify-between mb-5">
+          <div>
+            <h2 className="text-[10px] font-mono uppercase tracking-[0.3em] text-base-content/50 mb-1">Faucet</h2>
+            <p className="text-sm text-base-content/60">
+              Mint mock tokens to play with the protocol. Hackathon-only — these are worthless.
+            </p>
+          </div>
+        </div>
+        {!user ? (
+          <div className="text-xs text-base-content/40 font-mono uppercase tracking-[0.2em] py-6">
+            Connect your wallet to mint mock tokens.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {entries.map(e => (
+              <FaucetCard
+                key={e.config.contractName}
+                entry={e}
+                user={user as `0x${string}`}
+                writer={tokenWrites[e.config.contractName]}
+                balance={balance[e.config.contractName]}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -99,8 +131,6 @@ function TotalSumStat({
   entries: MaeveTokenEntry[];
   functionName: "totalDeposited" | "totalBorrowed";
 }) {
-  // Pull each token's totalDeposited/totalBorrowed independently, then sum.
-  // Hardcoding 3 hook calls (one per token) keeps the rules-of-hooks rule satisfied.
   const usdc = useScaffoldReadContract({
     contractName: "MaevePool",
     functionName,
@@ -155,6 +185,51 @@ function TokenScoreCard({ entry }: { entry: MaeveTokenEntry }) {
         <span>{numLenders !== undefined ? numLenders.toString() : <Skeleton width="1.5rem" />} accepting lenders</span>
         <span className={`${(scoreBps ?? 0n) > 0n ? "text-primary/80" : "text-base-content/20"}`}>●</span>
       </div>
+    </div>
+  );
+}
+
+function FaucetCard({
+  entry,
+  user,
+  writer,
+  balance,
+}: {
+  entry: MaeveTokenEntry;
+  user: `0x${string}`;
+  writer: ReturnType<typeof useMaeveContext>["tokenWrites"][keyof ReturnType<typeof useMaeveContext>["tokenWrites"]];
+  balance: bigint | undefined;
+}) {
+  const onMint = async () => {
+    try {
+      await writer.writeContractAsync({
+        functionName: "mint",
+        args: [user, FAUCET_AMOUNT],
+      });
+    } catch {
+      // useTransactor / simulate already surfaces an error toast.
+    }
+  };
+
+  return (
+    <div
+      className="rounded-lg p-5 flex flex-col gap-3"
+      style={{ border: "1px solid rgba(255,255,255,0.06)", background: "var(--color-base-200)" }}
+    >
+      <div className="flex items-baseline justify-between">
+        <div className="font-mono text-sm">{entry.config.symbol}</div>
+        <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-base-content/40">balance</div>
+      </div>
+      <div className="font-mono text-xl tabular-nums">
+        {balance !== undefined ? formatToken(balance) : <Skeleton width="4rem" />}
+      </div>
+      <button
+        onClick={onMint}
+        disabled={writer.isMining}
+        className="btn btn-primary btn-sm font-mono uppercase tracking-[0.2em] text-[10px]"
+      >
+        {writer.isMining ? "Minting…" : `Mint 10,000 ${entry.config.symbol}`}
+      </button>
     </div>
   );
 }
