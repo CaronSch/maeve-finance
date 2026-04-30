@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import type { NextPage } from "next";
 import { parseUnits } from "viem";
 import { AiRiskAgent } from "~~/components/AiRiskAgent";
@@ -22,7 +23,7 @@ const Lend: NextPage = () => {
   const depositEntry = ctx.entries.find(e => e.config.symbol === depositSymbol);
 
   return (
-    <div className="flex flex-col grow w-full max-w-7xl mx-auto px-6 py-12 gap-10">
+    <div className="flex flex-col grow w-full max-w-7xl mx-auto px-4 sm:px-6 py-12 gap-10">
       <header>
         <div className="text-[10px] font-mono uppercase tracking-[0.4em] text-base-content/40 mb-2">lend</div>
         <h1 className="text-3xl font-light">Provide liquidity, set your terms.</h1>
@@ -204,6 +205,15 @@ function DepositForm({
               {liquidity !== undefined ? `${formatToken(liquidity as bigint)} ${symbol}` : <Skeleton width="5rem" />}
             </span>
           </div>
+          {ctx.user && balance === 0n && (
+            <div className="mt-2 text-[10px] font-mono uppercase tracking-[0.2em] text-warning">
+              No {symbol}.{" "}
+              <Link href="/" className="underline hover:opacity-80">
+                Mint from the dashboard faucet
+              </Link>
+              .
+            </div>
+          )}
         </div>
         {!ctx.user ? (
           <button className="btn btn-primary mt-2 font-mono uppercase tracking-[0.2em] text-xs" disabled>
@@ -423,6 +433,16 @@ function CollateralPrefCard({
   });
   const tuple = pref as readonly [`0x${string}`, bigint, boolean] | undefined;
 
+  // Aggregate stats: how many lenders accept this pair, at what avg LTV.
+  const { data: pairData } = useScaffoldReadContract({
+    contractName: "MaevePool",
+    functionName: "getPairAcceptance",
+    args: [depositEntry?.address, collateralEntry.address],
+  });
+  const pairTuple = pairData as readonly [bigint, bigint] | undefined;
+  const avgLtvBps = pairTuple?.[0];
+  const numLenders = pairTuple?.[1];
+
   const [active, setActive] = useState(false);
   const [ltv, setLtv] = useState(7500);
   const [dirty, setDirty] = useState(false);
@@ -522,6 +542,66 @@ function CollateralPrefCard({
           <span>90%</span>
         </div>
       </div>
+
+      <PairAggregateBanner
+        depositSymbol={depositEntry?.config.symbol ?? "—"}
+        collateralSymbol={collateralEntry.config.symbol}
+        numLenders={numLenders}
+        avgLtvBps={avgLtvBps}
+        userActive={active}
+        userLtvBps={ltv}
+      />
+    </div>
+  );
+}
+
+function PairAggregateBanner({
+  depositSymbol,
+  collateralSymbol,
+  numLenders,
+  avgLtvBps,
+  userActive,
+  userLtvBps,
+}: {
+  depositSymbol: string;
+  collateralSymbol: string;
+  numLenders: bigint | undefined;
+  avgLtvBps: bigint | undefined;
+  userActive: boolean;
+  userLtvBps: number;
+}) {
+  if (numLenders === undefined || avgLtvBps === undefined) return null;
+  const count = Number(numLenders);
+  if (count === 0) {
+    return (
+      <div className="mt-4 pt-3 maeve-divider text-[10px] font-mono uppercase tracking-[0.2em] text-base-content/40">
+        Be the first to accept this pair.
+      </div>
+    );
+  }
+  const avg = Number(avgLtvBps);
+  const delta = userLtvBps - avg;
+  const showDelta = userActive && Math.abs(delta) > 0;
+  return (
+    <div className="mt-4 pt-3 maeve-divider flex items-center justify-between gap-2">
+      <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-base-content/50 leading-snug">
+        {count} lender{count === 1 ? "" : "s"} accept {collateralSymbol} for {depositSymbol}
+        <br />
+        avg {formatBpsAsPercent(avgLtvBps)}
+      </div>
+      {showDelta && (
+        <span
+          className={`text-[10px] font-mono uppercase tracking-[0.2em] tabular-nums px-2 py-1 rounded shrink-0 ${
+            delta > 0 ? "text-primary" : "text-warning"
+          }`}
+          style={{
+            border: `1px solid ${delta > 0 ? "rgba(45,212,168,0.3)" : "rgba(245,158,11,0.3)"}`,
+          }}
+        >
+          {delta > 0 ? "+" : ""}
+          {(delta / 100).toFixed(2)}%
+        </span>
+      )}
     </div>
   );
 }
