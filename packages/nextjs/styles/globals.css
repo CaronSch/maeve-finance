@@ -167,3 +167,19 @@
   outline: none;
   border-color: rgba(45, 212, 168, 0.4);
 }
+
+@keyframes maeve-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.maeve-stagger {
+  opacity: 0;
+  animation: maeve-slide-in 320ms ease-out forwards;
+}
