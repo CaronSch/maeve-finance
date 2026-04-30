@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import type { NextPage } from "next";
-
-// Placeholder data — wired to contract reads in a later step.
-const placeholderTokens = [
-  { symbol: "mUSDC", name: "Mock USDC", scoreBps: 7200, lenders: 14 },
-  { symbol: "mWETH", name: "Mock WETH", scoreBps: 8400, lenders: 22 },
-  { symbol: "mWBTC", name: "Mock WBTC", scoreBps: 6500, lenders: 9 },
-];
+import { Skeleton } from "~~/components/maeve/Skeleton";
+import { useScaffoldReadContract } from "~~/hooks/scaffold-eth/useScaffoldReadContract";
+import { MaeveTokenEntry, bpsToPercentNumber, formatBpsAsPercent, formatToken, useMaeveTokens } from "~~/utils/maeve";
 
 const Dashboard: NextPage = () => {
+  const { entries } = useMaeveTokens();
+  const { data: nextLoanId } = useScaffoldReadContract({
+    contractName: "MaevePool",
+    functionName: "nextLoanId",
+  });
+
   return (
     <div className="flex flex-col grow w-full max-w-7xl mx-auto px-6 py-12 gap-12">
       <header className="border-b border-white/5 pb-10">
@@ -22,16 +24,11 @@ const Dashboard: NextPage = () => {
       </header>
 
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[
-          { label: "Total Deposited", value: "—" },
-          { label: "Total Borrowed", value: "—" },
-          { label: "Active Loans", value: "—" },
-        ].map(stat => (
-          <div key={stat.label} className="maeve-card p-5">
-            <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-base-content/40">{stat.label}</div>
-            <div className="font-mono text-3xl mt-3 tabular-nums text-base-content/90">{stat.value}</div>
-          </div>
-        ))}
+        <TotalSumStat label="Total Deposited" entries={entries} functionName="totalDeposited" />
+        <TotalSumStat label="Total Borrowed" entries={entries} functionName="totalBorrowed" />
+        {/* SHORTCUT: nextLoanId counts every loan ever created, not currently-active.
+            A real metric would track active count, or scan loans with `active == true`. */}
+        <StatCard label="Active Loans" value={nextLoanId !== undefined ? nextLoanId.toString() : undefined} />
       </section>
 
       <section>
@@ -50,27 +47,8 @@ const Dashboard: NextPage = () => {
           </Link>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {placeholderTokens.map(t => (
-            <div key={t.symbol} className="maeve-card maeve-card-hover p-5">
-              <div className="flex items-baseline justify-between">
-                <div className="font-mono text-base text-base-content/90">{t.symbol}</div>
-                <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-base-content/40">{t.name}</div>
-              </div>
-              <div className="mt-5">
-                <div className="font-mono text-3xl tabular-nums">
-                  {(t.scoreBps / 100).toFixed(2)}
-                  <span className="text-base text-base-content/40 ml-1">%</span>
-                </div>
-                <div className="text-xs text-base-content/40 mt-1">average accepted LTV</div>
-              </div>
-              <div className="mt-4 h-1 bg-base-300 rounded-full overflow-hidden">
-                <div className="h-full bg-primary rounded-full" style={{ width: `${t.scoreBps / 100}%` }} />
-              </div>
-              <div className="mt-3 flex items-center justify-between text-[11px] font-mono text-base-content/50">
-                <span>{t.lenders} accepting lenders</span>
-                <span className="text-primary/80">●</span>
-              </div>
-            </div>
+          {entries.map(e => (
+            <TokenScoreCard key={e.config.contractName} entry={e} />
           ))}
         </div>
       </section>
@@ -100,5 +78,85 @@ const Dashboard: NextPage = () => {
     </div>
   );
 };
+
+function StatCard({ label, value }: { label: string; value?: string }) {
+  return (
+    <div className="maeve-card p-5">
+      <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-base-content/40">{label}</div>
+      <div className="font-mono text-3xl mt-3 tabular-nums text-base-content/90">
+        {value !== undefined ? value : <Skeleton width="6rem" />}
+      </div>
+    </div>
+  );
+}
+
+function TotalSumStat({
+  label,
+  entries,
+  functionName,
+}: {
+  label: string;
+  entries: MaeveTokenEntry[];
+  functionName: "totalDeposited" | "totalBorrowed";
+}) {
+  // Pull each token's totalDeposited/totalBorrowed independently, then sum.
+  // Hardcoding 3 hook calls (one per token) keeps the rules-of-hooks rule satisfied.
+  const usdc = useScaffoldReadContract({
+    contractName: "MaevePool",
+    functionName,
+    args: [entries[0].address],
+  });
+  const weth = useScaffoldReadContract({
+    contractName: "MaevePool",
+    functionName,
+    args: [entries[1].address],
+  });
+  const wbtc = useScaffoldReadContract({
+    contractName: "MaevePool",
+    functionName,
+    args: [entries[2].address],
+  });
+
+  const ready = usdc.data !== undefined && weth.data !== undefined && wbtc.data !== undefined;
+  const total = ready ? (usdc.data as bigint) + (weth.data as bigint) + (wbtc.data as bigint) : undefined;
+
+  return <StatCard label={label} value={total !== undefined ? formatToken(total) : undefined} />;
+}
+
+function TokenScoreCard({ entry }: { entry: MaeveTokenEntry }) {
+  const { data } = useScaffoldReadContract({
+    contractName: "MaevePool",
+    functionName: "getTokenCreditScore",
+    args: [entry.address],
+  });
+  const tuple = data as readonly [bigint, bigint] | undefined;
+  const scoreBps = tuple?.[0];
+  const numLenders = tuple?.[1];
+
+  return (
+    <div className="maeve-card maeve-card-hover p-5">
+      <div className="flex items-baseline justify-between">
+        <div className="font-mono text-base text-base-content/90">{entry.config.symbol}</div>
+        <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-base-content/40">{entry.config.name}</div>
+      </div>
+      <div className="mt-5">
+        <div className="font-mono text-3xl tabular-nums">
+          {scoreBps !== undefined ? formatBpsAsPercent(scoreBps) : <Skeleton width="5rem" />}
+        </div>
+        <div className="text-xs text-base-content/40 mt-1">average accepted LTV</div>
+      </div>
+      <div className="mt-4 h-1 bg-base-300 rounded-full overflow-hidden">
+        <div
+          className="h-full bg-primary rounded-full transition-all"
+          style={{ width: `${bpsToPercentNumber(scoreBps)}%` }}
+        />
+      </div>
+      <div className="mt-3 flex items-center justify-between text-[11px] font-mono text-base-content/50">
+        <span>{numLenders !== undefined ? numLenders.toString() : <Skeleton width="1.5rem" />} accepting lenders</span>
+        <span className={`${(scoreBps ?? 0n) > 0n ? "text-primary/80" : "text-base-content/20"}`}>●</span>
+      </div>
+    </div>
+  );
+}
 
 export default Dashboard;
