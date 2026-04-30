@@ -95,19 +95,29 @@ contract MaevePool is Ownable {
         uint256 collateralAmount
     );
     event Repaid(address indexed borrower, uint256 indexed loanId, uint256 totalOwed);
+    event TokenSupported(address indexed token, uint256 rateBps);
 
     constructor(address _owner) Ownable(_owner) {
         defaultInterestRateBps = 500; // 5%
     }
 
-    // --- Admin: token whitelist (no lending logic yet) ---
+    // --- Admin: token whitelist ---
+
+    function addSupportedToken(address token) external onlyOwner {
+        _addSupportedToken(token, defaultInterestRateBps);
+    }
 
     function addSupportedToken(address token, uint256 rateBps) external onlyOwner {
+        _addSupportedToken(token, rateBps);
+    }
+
+    function _addSupportedToken(address token, uint256 rateBps) internal {
         require(token != address(0), "zero token");
         require(!supportedTokens[token], "already supported");
         supportedTokens[token] = true;
-        interestRateBps[token] = rateBps == 0 ? defaultInterestRateBps : rateBps;
+        interestRateBps[token] = rateBps;
         tokenList.push(token);
+        emit TokenSupported(token, rateBps);
     }
 
     // --- Lender flows ---
@@ -204,6 +214,43 @@ contract MaevePool is Ownable {
 
     function getLoanDetails(uint256 loanId) public view returns (Loan memory) {
         return loans[loanId];
+    }
+
+    // --- Credit scoring (signature feature) ---
+
+    function getTokenCreditScore(address token) public view returns (uint256 score, uint256 numLenders) {
+        // SHORTCUT: O(supportedTokens * depositors). Acceptable for a demo. A real
+        // protocol would maintain an aggregate index updated on setCollateralPreference,
+        // or compute this off-chain from emitted events.
+        // SHORTCUT: Not weighted by deposit size. Real version weights by deposit
+        // amount so a whale's preference matters more than a dust depositor.
+        uint256 totalLTV = 0;
+        uint256 count = 0;
+        for (uint256 i = 0; i < tokenList.length; i++) {
+            address depositToken = tokenList[i];
+            address[] storage list = depositors[depositToken];
+            for (uint256 j = 0; j < list.length; j++) {
+                address lender = list[j];
+                CollateralPreference storage p = collateralPrefs[depositToken][lender][token];
+                if (p.active && deposits[depositToken][lender].amount > 0) {
+                    totalLTV += p.maxLTV;
+                    count += 1;
+                }
+            }
+        }
+        if (count == 0) return (0, 0);
+        return (totalLTV / count, count);
+    }
+
+    function getAllTokenScores() public view returns (address[] memory tokens, uint256[] memory scores) {
+        uint256 n = tokenList.length;
+        tokens = new address[](n);
+        scores = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            tokens[i] = tokenList[i];
+            (uint256 s, ) = getTokenCreditScore(tokenList[i]);
+            scores[i] = s;
+        }
     }
 
     function getOutstandingDebt(uint256 loanId) public view returns (uint256) {

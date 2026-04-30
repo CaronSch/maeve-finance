@@ -42,8 +42,8 @@ describe("MaevePool", () => {
     await pool.waitForDeployment();
     poolAddr = await pool.getAddress();
 
-    await pool.connect(owner).addSupportedToken(usdcAddr, 500);
-    await pool.connect(owner).addSupportedToken(wethAddr, 300);
+    await pool.connect(owner)["addSupportedToken(address,uint256)"](usdcAddr, 500);
+    await pool.connect(owner)["addSupportedToken(address,uint256)"](wethAddr, 300);
 
     await usdc.mint(lenderAAddr, MILLION);
     await usdc.mint(lenderBAddr, MILLION);
@@ -264,6 +264,106 @@ describe("MaevePool", () => {
       // Repaying transfers totalOwed; borrower had 1M minted at setup so they cover the interest.
       await pool.connect(borrower).repay(0);
       expect(await pool.getOutstandingDebt(0)).to.equal(0);
+    });
+  });
+
+  describe("addSupportedToken events + default-rate overload", () => {
+    let wbtc: MockERC20;
+    let wbtcAddr: string;
+
+    beforeEach(async () => {
+      const Factory = await ethers.getContractFactory("MockERC20");
+      wbtc = (await Factory.deploy("Mock WBTC", "mWBTC")) as unknown as MockERC20;
+      await wbtc.waitForDeployment();
+      wbtcAddr = await wbtc.getAddress();
+    });
+
+    it("emits TokenSupported with the explicit rate", async () => {
+      await expect(pool.connect(owner)["addSupportedToken(address,uint256)"](wbtcAddr, 250))
+        .to.emit(pool, "TokenSupported")
+        .withArgs(wbtcAddr, 250);
+      expect(await pool.interestRateBps(wbtcAddr)).to.equal(250);
+    });
+
+    it("single-arg overload uses defaultInterestRateBps and emits TokenSupported", async () => {
+      const defaultRate = await pool.defaultInterestRateBps();
+      await expect(pool.connect(owner)["addSupportedToken(address)"](wbtcAddr))
+        .to.emit(pool, "TokenSupported")
+        .withArgs(wbtcAddr, defaultRate);
+      expect(await pool.interestRateBps(wbtcAddr)).to.equal(defaultRate);
+    });
+
+    it("rejects double-whitelisting via either overload", async () => {
+      await pool.connect(owner)["addSupportedToken(address,uint256)"](wbtcAddr, 250);
+      await expect(pool.connect(owner)["addSupportedToken(address)"](wbtcAddr)).to.be.revertedWith("already supported");
+    });
+  });
+
+  describe("credit scores", () => {
+    let wbtc: MockERC20;
+    let wbtcAddr: string;
+
+    beforeEach(async () => {
+      const Factory = await ethers.getContractFactory("MockERC20");
+      wbtc = (await Factory.deploy("Mock WBTC", "mWBTC")) as unknown as MockERC20;
+      await wbtc.waitForDeployment();
+      wbtcAddr = await wbtc.getAddress();
+      await pool.connect(owner)["addSupportedToken(address)"](wbtcAddr);
+    });
+
+    it("returns (0, 0) when no lender accepts the token as collateral", async () => {
+      const [score, num] = await pool.getTokenCreditScore(wbtcAddr);
+      expect(score).to.equal(0);
+      expect(num).to.equal(0);
+    });
+
+    it("aggregates accept count and avg LTV across multiple deposit pools", async () => {
+      // LenderA in USDC pool: accept WBTC at 7000
+      // LenderB in USDC pool: accept WBTC at 5000
+      // LenderA in WETH pool: accept WBTC at 9000
+      // -> WBTC credit score = (7000 + 5000 + 9000) / 3 = 7000, numLenders = 3
+      await pool.connect(lenderA).deposit(usdcAddr, HUNDRED);
+      await pool.connect(lenderB).deposit(usdcAddr, HUNDRED);
+      await pool.connect(lenderA).deposit(wethAddr, HUNDRED);
+
+      await pool.connect(lenderA).setCollateralPreference(usdcAddr, wbtcAddr, 7000, true);
+      await pool.connect(lenderB).setCollateralPreference(usdcAddr, wbtcAddr, 5000, true);
+      await pool.connect(lenderA).setCollateralPreference(wethAddr, wbtcAddr, 9000, true);
+
+      const [score, num] = await pool.getTokenCreditScore(wbtcAddr);
+      expect(score).to.equal(7000);
+      expect(num).to.equal(3);
+    });
+
+    it("ignores inactive prefs and lenders who have withdrawn", async () => {
+      await pool.connect(lenderA).deposit(usdcAddr, HUNDRED);
+      await pool.connect(lenderB).deposit(usdcAddr, HUNDRED);
+      await pool.connect(lenderA).setCollateralPreference(usdcAddr, wbtcAddr, 8000, true);
+      await pool.connect(lenderB).setCollateralPreference(usdcAddr, wbtcAddr, 6000, false);
+
+      const [score, num] = await pool.getTokenCreditScore(wbtcAddr);
+      expect(score).to.equal(8000);
+      expect(num).to.equal(1);
+
+      await pool.connect(lenderA).withdraw(usdcAddr, HUNDRED);
+      const [scoreAfter, numAfter] = await pool.getTokenCreditScore(wbtcAddr);
+      expect(scoreAfter).to.equal(0);
+      expect(numAfter).to.equal(0);
+    });
+
+    it("getAllTokenScores returns parallel arrays for every supported token", async () => {
+      // WBTC accepted by one lender at 8000; WETH and USDC accepted by no one.
+      await pool.connect(lenderA).deposit(usdcAddr, HUNDRED);
+      await pool.connect(lenderA).setCollateralPreference(usdcAddr, wbtcAddr, 8000, true);
+
+      const [tokens, scores] = await pool.getAllTokenScores();
+      expect(tokens).to.have.length(3);
+      expect(scores).to.have.length(3);
+      expect(tokens).to.deep.equal([usdcAddr, wethAddr, wbtcAddr]);
+      // tokens[0]=USDC (no acceptors), tokens[1]=WETH (no acceptors), tokens[2]=WBTC (8000)
+      expect(scores[0]).to.equal(0);
+      expect(scores[1]).to.equal(0);
+      expect(scores[2]).to.equal(8000);
     });
   });
 });

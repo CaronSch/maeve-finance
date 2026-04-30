@@ -23,7 +23,7 @@ const deployMaeve: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     await execute(
       "MaevePool",
       { from: deployer, log: true, autoMine: true },
-      "addSupportedToken",
+      "addSupportedToken(address,uint256)",
       token.address,
       t.rate,
     );
