@@ -235,6 +235,25 @@ const deployedContracts = {
             {
               indexed: true,
               internalType: "address",
+              name: "token",
+              type: "address",
+            },
+            {
+              indexed: false,
+              internalType: "uint256",
+              name: "rateBps",
+              type: "uint256",
+            },
+          ],
+          name: "TokenSupported",
+          type: "event",
+        },
+        {
+          anonymous: false,
+          inputs: [
+            {
+              indexed: true,
+              internalType: "address",
               name: "lender",
               type: "address",
             },
@@ -278,6 +297,19 @@ const deployedContracts = {
               internalType: "uint256",
               name: "rateBps",
               type: "uint256",
+            },
+          ],
+          name: "addSupportedToken",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "token",
+              type: "address",
             },
           ],
           name: "addSupportedToken",
@@ -437,6 +469,24 @@ const deployedContracts = {
           type: "function",
         },
         {
+          inputs: [],
+          name: "getAllTokenScores",
+          outputs: [
+            {
+              internalType: "address[]",
+              name: "tokens",
+              type: "address[]",
+            },
+            {
+              internalType: "uint256[]",
+              name: "scores",
+              type: "uint256[]",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
           inputs: [
             {
               internalType: "address",
@@ -548,6 +598,30 @@ const deployedContracts = {
             {
               internalType: "uint256",
               name: "",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
+              name: "token",
+              type: "address",
+            },
+          ],
+          name: "getTokenCreditScore",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "score",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "numLenders",
               type: "uint256",
             },
           ],
