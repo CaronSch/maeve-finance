@@ -201,11 +201,13 @@ protocol would address:
 | Shortcut | Where | What production needs |
 |---|---|---|
 | 1:1 price assumption | `MaevePool.borrow` | Chainlink/Pyth oracle for cross-asset LTV calculation |
+| No liquidation logic | `MaevePool` | Health-factor monitoring + liquidation bot. Without it, undercollateralized loans never get unwound — a borrower whose collateral price tanks just keeps holding the borrowed funds |
 | Flat per-token interest rate | `interestRateBps` | Utilization curve (Aave-style) |
-| Simple counters, not share tokens | `totalDeposited`, `deposits` | Share token / ray-math accumulator |
+| Simple balance accounting, not share tokens | `totalDeposited`, `deposits` | ERC-4626 vault shares (or aTokens) so deposits accrue value automatically and second-order yield is composable |
 | `O(n)` depositor scan in views | `getEffectiveLTV`, `getTokenCreditScore`, `getPairAcceptance` | Aggregated index updated on `setCollateralPreference`, or off-chain via subgraph |
 | Unweighted LTV averages | Same | Deposit-weighted average so a whale's preference matters more |
 | Append-only `depositors[]` array | `MaevePool.deposit` | EnumerableSet, or remove the iteration entirely via shares |
+| No batch operations | Contract has no `setCollateralPreferences` (plural); AI agent fires one tx per recommendation | Batch entry points + multicall on the client; the agent's "Apply All" should be a single tx |
 | Interest accrued only on repay; not routed to lenders | `MaevePool.repay` | Per-block accrual + proportional distribution to active lenders |
 | Full-repay only; no partial repayments | `MaevePool.repay` | Partial-repay logic + interest-vs-principal split |
 | All mocks 18 decimals | `01_deploy_mocks.ts` | Use real decimals (USDC=6, WBTC=8) and normalize |
@@ -213,6 +215,8 @@ protocol would address:
 | O(n) loan scan in My Loans | `borrow/page.tsx` | Subgraph or `Borrowed`/`Repaid` event indexing |
 | `nextLoanId` shown as "Active Loans" | Dashboard | Maintain an active counter or scan `loans[].active` |
 | AI agent uses hardcoded token profiles | `/api/ai-risk-agent` | On-chain price feeds, historical volatility, real-time liquidity depth |
+| Owner-controlled admin (Ownable) | `addSupportedToken`, default rate | DAO or multi-sig for parameter changes; per-parameter timelocks for sensitive knobs |
+| No flash loans | Not implemented | Standard DeFi primitive — useful for arbitrage, refi, and liquidator bots once liquidation exists |
 
 Every shortcut is also flagged inline in the source — grep for `SHORTCUT` and
 `HACKATHON`.
