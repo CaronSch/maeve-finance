@@ -608,6 +608,35 @@ const deployedContracts = {
           inputs: [
             {
               internalType: "address",
+              name: "borrowToken",
+              type: "address",
+            },
+            {
+              internalType: "address",
+              name: "collateralToken",
+              type: "address",
+            },
+          ],
+          name: "getPairAcceptance",
+          outputs: [
+            {
+              internalType: "uint256",
+              name: "avgLtv",
+              type: "uint256",
+            },
+            {
+              internalType: "uint256",
+              name: "numLenders",
+              type: "uint256",
+            },
+          ],
+          stateMutability: "view",
+          type: "function",
+        },
+        {
+          inputs: [
+            {
+              internalType: "address",
               name: "token",
               type: "address",
             },

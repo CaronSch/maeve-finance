@@ -1,12 +1,13 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { NextPage } from "next";
-import { parseUnits } from "viem";
+import { formatUnits, parseUnits } from "viem";
 import { Skeleton } from "~~/components/maeve/Skeleton";
 import { useMaeveContext } from "~~/hooks/maeve";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth/useScaffoldReadContract";
-import { MaeveTokenEntry, bpsToPercentNumber, formatBpsAsPercent, formatToken } from "~~/utils/maeve";
+import { MaeveTokenEntry, TOKEN_DECIMALS, bpsToPercentNumber, formatBpsAsPercent, formatToken } from "~~/utils/maeve";
 
 const FAUCET_AMOUNT = parseUnits("10000", 18);
 
@@ -18,21 +19,20 @@ const Dashboard: NextPage = () => {
   });
 
   return (
-    <div className="flex flex-col grow w-full max-w-7xl mx-auto px-6 py-12 gap-12">
+    <div className="flex flex-col grow w-full max-w-7xl mx-auto px-4 sm:px-6 py-12 gap-12">
       <header className="border-b border-white/5 pb-10">
         <div className="text-[10px] font-mono uppercase tracking-[0.4em] text-base-content/40 mb-3">
           maeve // protocol
         </div>
-        <h1 className="text-5xl md:text-6xl font-light tracking-tight mb-4">Maeve Finance.</h1>
-        <p className="text-lg text-base-content/60 max-w-2xl">Lending where lenders set the rules.</p>
+        <h1 className="text-4xl sm:text-5xl md:text-6xl font-light tracking-tight mb-4">Maeve Finance.</h1>
+        <p className="text-base sm:text-lg text-base-content/60 max-w-2xl">Lending where lenders set the rules.</p>
       </header>
 
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <TotalSumStat label="Total Deposited" entries={entries} functionName="totalDeposited" />
-        <TotalSumStat label="Total Borrowed" entries={entries} functionName="totalBorrowed" />
-        {/* SHORTCUT: nextLoanId counts every loan ever created, not currently-active.
-            A real metric would track active count, or scan loans with `active == true`. */}
-        <StatCard label="Active Loans" value={nextLoanId !== undefined ? nextLoanId.toString() : undefined} />
+        <SumStat label="Total Deposited" entries={entries} functionName="totalDeposited" />
+        <SumStat label="Total Borrowed" entries={entries} functionName="totalBorrowed" />
+        {/* SHORTCUT: nextLoanId counts every loan ever created, not currently-active. */}
+        <CountStat label="Active Loans" value={nextLoanId !== undefined ? Number(nextLoanId) : undefined} />
       </section>
 
       <section>
@@ -45,20 +45,49 @@ const Dashboard: NextPage = () => {
           </div>
           <Link
             href="/scores"
-            className="text-[10px] font-mono uppercase tracking-[0.3em] text-primary hover:opacity-80"
+            className="text-[10px] font-mono uppercase tracking-[0.3em] text-primary hover:opacity-80 whitespace-nowrap"
           >
             View leaderboard →
           </Link>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Mobile: horizontal scroll. Desktop: 3-up grid. */}
+        <div className="flex md:grid md:grid-cols-3 gap-4 overflow-x-auto md:overflow-visible -mx-4 px-4 md:mx-0 md:px-0 snap-x snap-mandatory md:snap-none">
           {entries.map(e => (
-            <TokenScoreCard key={e.config.contractName} entry={e} />
+            <div key={e.config.contractName} className="snap-center shrink-0 w-[80%] md:w-auto md:shrink">
+              <TokenScoreCard entry={e} />
+            </div>
           ))}
         </div>
       </section>
 
+      <section>
+        <div className="mb-5">
+          <h2 className="text-xl font-medium">How It Works</h2>
+          <p className="text-sm text-base-content/50 mt-1">
+            Three steps. Lenders pick the rules; borrowers play within them.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <HowCard
+            step="01"
+            title="Deposit & Set Rules"
+            body="Provide liquidity, then choose which collateral types can back loans against your funds — and at what max LTV."
+          />
+          <HowCard
+            step="02"
+            title="AI Analyzes Risk"
+            body="Maeve's risk agent recommends accept/reject and LTV per pair based on your risk tolerance. Apply with one click."
+          />
+          <HowCard
+            step="03"
+            title="Borrowers Access Liquidity"
+            body="Borrowers see live aggregate LTVs derived from active lender preferences. They borrow only on terms lenders signed off on."
+          />
+        </div>
+      </section>
+
       <section className="maeve-card p-6">
-        <div className="flex items-baseline justify-between mb-5">
+        <div className="flex items-baseline justify-between mb-5 gap-4">
           <div>
             <h2 className="text-[10px] font-mono uppercase tracking-[0.3em] text-base-content/50 mb-1">Faucet</h2>
             <p className="text-sm text-base-content/60">
@@ -111,6 +140,69 @@ const Dashboard: NextPage = () => {
   );
 };
 
+/** easeOutCubic count-up animation; honors prefers-reduced-motion. */
+function useCountUp(target: number | undefined, duration = 900) {
+  const [value, setValue] = useState(0);
+  const prevRef = useRef(0);
+
+  useEffect(() => {
+    if (target === undefined) return;
+    if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      setValue(target);
+      prevRef.current = target;
+      return;
+    }
+    const from = prevRef.current;
+    const start = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const next = from + (target - from) * eased;
+      setValue(next);
+      if (t < 1) raf = requestAnimationFrame(tick);
+      else prevRef.current = target;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, duration]);
+
+  return target === undefined ? undefined : value;
+}
+
+function SumStat({
+  label,
+  entries,
+  functionName,
+}: {
+  label: string;
+  entries: MaeveTokenEntry[];
+  functionName: "totalDeposited" | "totalBorrowed";
+}) {
+  const usdc = useScaffoldReadContract({ contractName: "MaevePool", functionName, args: [entries[0].address] });
+  const weth = useScaffoldReadContract({ contractName: "MaevePool", functionName, args: [entries[1].address] });
+  const wbtc = useScaffoldReadContract({ contractName: "MaevePool", functionName, args: [entries[2].address] });
+
+  const ready = usdc.data !== undefined && weth.data !== undefined && wbtc.data !== undefined;
+  const totalUnits = ready
+    ? Number(formatUnits((usdc.data as bigint) + (weth.data as bigint) + (wbtc.data as bigint), TOKEN_DECIMALS))
+    : undefined;
+
+  const animated = useCountUp(totalUnits);
+  const displayed =
+    animated === undefined
+      ? undefined
+      : animated.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return <StatCard label={label} value={displayed} />;
+}
+
+function CountStat({ label, value }: { label: string; value?: number }) {
+  const animated = useCountUp(value);
+  const displayed = animated === undefined ? undefined : Math.round(animated).toLocaleString("en-US");
+  return <StatCard label={label} value={displayed} />;
+}
+
 function StatCard({ label, value }: { label: string; value?: string }) {
   return (
     <div className="maeve-card p-5">
@@ -122,35 +214,14 @@ function StatCard({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function TotalSumStat({
-  label,
-  entries,
-  functionName,
-}: {
-  label: string;
-  entries: MaeveTokenEntry[];
-  functionName: "totalDeposited" | "totalBorrowed";
-}) {
-  const usdc = useScaffoldReadContract({
-    contractName: "MaevePool",
-    functionName,
-    args: [entries[0].address],
-  });
-  const weth = useScaffoldReadContract({
-    contractName: "MaevePool",
-    functionName,
-    args: [entries[1].address],
-  });
-  const wbtc = useScaffoldReadContract({
-    contractName: "MaevePool",
-    functionName,
-    args: [entries[2].address],
-  });
-
-  const ready = usdc.data !== undefined && weth.data !== undefined && wbtc.data !== undefined;
-  const total = ready ? (usdc.data as bigint) + (weth.data as bigint) + (wbtc.data as bigint) : undefined;
-
-  return <StatCard label={label} value={total !== undefined ? formatToken(total) : undefined} />;
+function HowCard({ step, title, body }: { step: string; title: string; body: string }) {
+  return (
+    <div className="maeve-card p-5 flex flex-col gap-3">
+      <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-primary">{step}</div>
+      <div className="text-lg font-light">{title}</div>
+      <p className="text-sm text-base-content/60 leading-relaxed">{body}</p>
+    </div>
+  );
 }
 
 function TokenScoreCard({ entry }: { entry: MaeveTokenEntry }) {
@@ -164,7 +235,7 @@ function TokenScoreCard({ entry }: { entry: MaeveTokenEntry }) {
   const numLenders = tuple?.[1];
 
   return (
-    <div className="maeve-card maeve-card-hover p-5">
+    <div className="maeve-card maeve-card-hover p-5 h-full">
       <div className="flex items-baseline justify-between">
         <div className="font-mono text-base text-base-content/90">{entry.config.symbol}</div>
         <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-base-content/40">{entry.config.name}</div>
@@ -202,15 +273,11 @@ function FaucetCard({
 }) {
   const onMint = async () => {
     try {
-      await writer.writeContractAsync({
-        functionName: "mint",
-        args: [user, FAUCET_AMOUNT],
-      });
+      await writer.writeContractAsync({ functionName: "mint", args: [user, FAUCET_AMOUNT] });
     } catch {
-      // useTransactor / simulate already surfaces an error toast.
+      // toast surfaced by useTransactor
     }
   };
-
   return (
     <div
       className="rounded-lg p-5 flex flex-col gap-3"
